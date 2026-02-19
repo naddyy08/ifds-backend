@@ -73,3 +73,6 @@ if __name__ == '__main__':
     print("[RUNNING] IFDS Backend Server Running...")
     print("[SERVER] http://localhost:5000")
     app.run(debug=True, port=5000)
+
+# Create app instance for Gunicorn (production)
+app = create_app()
