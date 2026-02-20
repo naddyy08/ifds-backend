@@ -9,14 +9,6 @@ from routes.inventory import inventory_bp
 from routes.transactions import transactions_bp
 from routes.fraud import fraud_bp
 from routes.reports import reports_bp
-import os
-
-# DEBUG: Print to check if .env is loaded
-print("=" * 50)
-print("DEBUG: Checking environment variables...")
-print(f"DATABASE_URI: {os.getenv('DATABASE_URI')}")
-print(f"JWT_SECRET_KEY: {os.getenv('JWT_SECRET_KEY')}")
-print("=" * 50)
 
 def create_app():
     """Application factory pattern"""
@@ -40,7 +32,6 @@ def create_app():
     # Create database tables
     with app.app_context():
         db.create_all()
-        print("[OK] Database tables created!")
     
     # Root endpoint
     @app.route('/')
@@ -66,12 +57,18 @@ def create_app():
     def internal_error(error):
         return jsonify({'error': 'Internal server error'}), 500
     
+    @app.errorhandler(401)
+    def unauthorized(error):
+        return jsonify({'error': 'Unauthorized access'}), 401
+    
+    @app.errorhandler(403)
+    def forbidden(error):
+        return jsonify({'error': 'Forbidden - insufficient permissions'}), 403
+    
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    print("[RUNNING] IFDS Backend Server Running...")
-    print("[SERVER] http://localhost:5000")
     app.run(debug=True, port=5000)
 
 # Create app instance for Gunicorn (production)

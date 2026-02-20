@@ -9,12 +9,34 @@ from flask_jwt_extended import (
 )
 from models import db, User, AuditLog
 from datetime import datetime
+import re
 
 auth_bp = Blueprint('auth', __name__)
 bcrypt = Bcrypt()
 
+
+def validate_password_strength(password):
+    """
+    Validate password meets security requirements
+    Returns (is_valid, error_message)
+    """
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long"
+    
+    if not re.search(r"[A-Z]", password):
+        return False, "Password must contain at least one uppercase letter"
+    
+    if not re.search(r"[a-z]", password):
+        return False, "Password must contain at least one lowercase letter"
+    
+    if not re.search(r"\d", password):
+        return False, "Password must contain at least one number"
+    
+    return True, None
+
+
 # ============================================
-# REGISTER NEW USER (Admin Only)
+# REGISTER NEW USER
 # ============================================
 @auth_bp.route('/register', methods=['POST'])
 def register():
@@ -31,6 +53,15 @@ def register():
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
         
+        # Validate username length
+        if len(data['username']) < 3:
+            return jsonify({'error': 'Username must be at least 3 characters long'}), 400
+        
+        # Validate email format
+        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_regex, data['email']):
+            return jsonify({'error': 'Invalid email format'}), 400
+        
         # Check if username already exists
         if User.query.filter_by(username=data['username']).first():
             return jsonify({'error': 'Username already exists'}), 409
@@ -43,6 +74,11 @@ def register():
         valid_roles = ['admin', 'manager', 'staff']
         if data['role'] not in valid_roles:
             return jsonify({'error': 'Invalid role. Must be: admin, manager, or staff'}), 400
+        
+        # Validate password strength
+        is_valid, error_msg = validate_password_strength(data['password'])
+        if not is_valid:
+            return jsonify({'error': error_msg}), 400
         
         # Hash password
         password_hash = bcrypt.generate_password_hash(data['password']).decode('utf-8')
@@ -62,7 +98,7 @@ def register():
         log = AuditLog(
             user_id=new_user.id,
             action='USER_REGISTERED',
-            details=f'New {data["role"]} user registered',
+            details=f'New {data["role"]} user registered: {data["username"]}',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -92,28 +128,49 @@ def login():
         user = User.query.filter_by(username=data['username']).first()
         
         if not user:
+            # Log failed login attempt
+            log = AuditLog(
+                user_id=None,
+                action='FAILED_LOGIN_ATTEMPT',
+                details=f'Failed login attempt for username: {data["username"]}',
+                ip_address=request.remote_addr
+            )
+            db.session.add(log)
+            db.session.commit()
+            
             return jsonify({'error': 'Invalid credentials'}), 401
         
         if not user.is_active:
-            return jsonify({'error': 'Account is deactivated'}), 403
+            return jsonify({'error': 'Account is deactivated. Please contact administrator.'}), 403
         
         if not bcrypt.check_password_hash(user.password_hash, data['password']):
+            # Log failed password attempt
+            log = AuditLog(
+                user_id=user.id,
+                action='FAILED_LOGIN_ATTEMPT',
+                details=f'Failed login attempt - wrong password',
+                ip_address=request.remote_addr
+            )
+            db.session.add(log)
+            db.session.commit()
+            
             return jsonify({'error': 'Invalid credentials'}), 401
         
-        # ✅ FIXED: identity must be a STRING
+        # Create JWT token with role claims
         access_token = create_access_token(
             identity=str(user.id),
-            additional_claims={        # ← Store extra info here
+            additional_claims={
                 'username': user.username,
                 'role': user.role,
                 'email': user.email
             }
         )
         
+        # Log successful login
         log = AuditLog(
             user_id=user.id,
             action='USER_LOGIN',
-            details='User logged in successfully',
+            details=f'User logged in successfully (Role: {user.role})',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -128,6 +185,7 @@ def login():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 # ============================================
 # GET CURRENT USER PROFILE
 # ============================================
@@ -135,7 +193,6 @@ def login():
 @jwt_required()
 def get_profile():
     try:
-        # ✅ FIXED: identity is now a string (user ID)
         user_id = get_jwt_identity()
         user = User.query.get(int(user_id))
         
@@ -151,7 +208,7 @@ def get_profile():
 
 
 # ============================================
-# LOGOUT (Optional - for audit trail)
+# LOGOUT (For audit trail)
 # ============================================
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
@@ -187,20 +244,40 @@ def change_password():
         if not data.get('current_password') or not data.get('new_password'):
             return jsonify({'error': 'Current and new password are required'}), 400
         
+        # Validate new password strength
+        is_valid, error_msg = validate_password_strength(data['new_password'])
+        if not is_valid:
+            return jsonify({'error': error_msg}), 400
+        
         user = User.query.get(int(user_id))
         
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Verify current password
         if not bcrypt.check_password_hash(user.password_hash, data['current_password']):
+            log = AuditLog(
+                user_id=int(user_id),
+                action='FAILED_PASSWORD_CHANGE',
+                details='Failed password change attempt - wrong current password',
+                ip_address=request.remote_addr
+            )
+            db.session.add(log)
+            db.session.commit()
+            
             return jsonify({'error': 'Current password is incorrect'}), 401
         
+        # Update password
         user.password_hash = bcrypt.generate_password_hash(
             data['new_password']
         ).decode('utf-8')
         db.session.commit()
         
+        # Log successful password change
         log = AuditLog(
             user_id=int(user_id),
             action='PASSWORD_CHANGED',
-            details='User changed password',
+            details='User changed password successfully',
             ip_address=request.remote_addr
         )
         db.session.add(log)

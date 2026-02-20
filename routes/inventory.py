@@ -222,7 +222,7 @@ def delete_item(item_id):
             db.session.commit()
             
             return jsonify({
-                'error': 'Unauthorized. Only administrators can delete inventory items.'
+                'error': 'Unauthorized. Only admins can delete inventory items.'
             }), 403
         
         item = Inventory.query.get(item_id)

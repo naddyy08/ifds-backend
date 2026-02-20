@@ -2,7 +2,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models import db, FraudAlert, Transaction, AuditLog
-from utils.fraud_engine import get_fraud_statistics, analyze_transaction
 from datetime import datetime
 
 fraud_bp = Blueprint('fraud', __name__)
@@ -15,31 +14,34 @@ fraud_bp = Blueprint('fraud', __name__)
 @jwt_required()
 def get_all_alerts():
     """
-    Get all fraud alerts
-    Optional filters: ?severity=high&status=pending
+    Get all fraud alerts (all roles can view)
+    Optional filters: ?status=pending&severity=high
     """
     try:
+        user_id = int(get_jwt_identity())
+        
+        # Get query parameters
+        status = request.args.get('status')
+        severity = request.args.get('severity')
+        
         query = FraudAlert.query
         
-        # Filter by severity
-        severity = request.args.get('severity')
+        if status:
+            query = query.filter_by(status=status)
         if severity:
             query = query.filter_by(severity=severity)
         
-        # Filter by status
-        status = request.args.get('status')
-        if status:
-            query = query.filter_by(status=status)
+        alerts = query.order_by(FraudAlert.detected_at.desc()).all()
         
-        # Filter by alert type
-        alert_type = request.args.get('type')
-        if alert_type:
-            query = query.filter_by(alert_type=alert_type)
-        
-        # Order by latest first
-        alerts = query.order_by(
-            FraudAlert.detected_at.desc()
-        ).all()
+        # Log action
+        log = AuditLog(
+            user_id=user_id,
+            action='VIEW_FRAUD_ALERTS',
+            details=f'Viewed {len(alerts)} fraud alerts',
+            ip_address=request.remote_addr
+        )
+        db.session.add(log)
+        db.session.commit()
         
         return jsonify({
             'alerts': [alert.to_dict() for alert in alerts],
@@ -57,7 +59,7 @@ def get_all_alerts():
 @jwt_required()
 def get_alert_by_id(alert_id):
     """
-    Get specific fraud alert by ID
+    Get specific fraud alert details (all roles)
     """
     try:
         alert = FraudAlert.query.get(alert_id)
@@ -65,51 +67,62 @@ def get_alert_by_id(alert_id):
         if not alert:
             return jsonify({'error': 'Alert not found'}), 404
         
-        return jsonify({
-            'alert': alert.to_dict()
-        }), 200
+        return jsonify({'alert': alert.to_dict()}), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 # ============================================
-# REVIEW ALERT (Mark as Reviewed)
+# REVIEW FRAUD ALERT (Manager/Admin Only)
 # ============================================
 @fraud_bp.route('/<int:alert_id>/review', methods=['PUT'])
 @jwt_required()
 def review_alert(alert_id):
     """
-    Mark alert as reviewed
-    Required: status (resolved/dismissed)
-    Optional: notes
+    Review and update fraud alert status
+    RBAC: Only managers and admins can review alerts
+    Required: {status: 'resolved'/'dismissed', notes: 'review notes'}
     """
     try:
         user_id = int(get_jwt_identity())
         claims = get_jwt()
         role = claims.get('role')
         
-        # Only admin and manager can review
+        # ✅ RBAC: Only manager and admin can review
         if role not in ['admin', 'manager']:
+            log = AuditLog(
+                user_id=user_id,
+                action='UNAUTHORIZED_ALERT_REVIEW_ATTEMPT',
+                details=f'User with role "{role}" attempted to review alert {alert_id}',
+                ip_address=request.remote_addr
+            )
+            db.session.add(log)
+            db.session.commit()
+            
             return jsonify({
-                'error': 'Unauthorized. Only admin and manager can review alerts.'
+                'error': 'Unauthorized. Only managers and administrators can review fraud alerts.'
             }), 403
+        
+        data = request.get_json()
+        
+        # Validate required fields
+        if 'status' not in data:
+            return jsonify({'error': 'Status is required'}), 400
+        
+        valid_statuses = ['reviewed', 'resolved', 'dismissed']
+        if data['status'] not in valid_statuses:
+            return jsonify({
+                'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'
+            }), 400
         
         alert = FraudAlert.query.get(alert_id)
         
         if not alert:
             return jsonify({'error': 'Alert not found'}), 404
         
-        data = request.get_json()
-        
-        # Validate status
-        valid_statuses = ['reviewed', 'resolved', 'dismissed']
-        if data.get('status') not in valid_statuses:
-            return jsonify({
-                'error': f'Invalid status. Must be: {", ".join(valid_statuses)}'
-            }), 400
-        
         # Update alert
+        old_status = alert.status
         alert.status = data['status']
         alert.reviewed_by = user_id
         alert.reviewed_at = datetime.utcnow()
@@ -117,11 +130,11 @@ def review_alert(alert_id):
         
         db.session.commit()
         
-        # Audit log
+        # Log the review
         log = AuditLog(
             user_id=user_id,
-            action='REVIEW_FRAUD_ALERT',
-            details=f'Alert #{alert_id} marked as {data["status"]}',
+            action='FRAUD_ALERT_REVIEWED',
+            details=f'Alert {alert_id} reviewed: {old_status} → {data["status"]}. Type: {alert.alert_type}',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -138,89 +151,51 @@ def review_alert(alert_id):
 
 
 # ============================================
-# GET FRAUD STATISTICS
+# FRAUD STATISTICS
 # ============================================
 @fraud_bp.route('/statistics', methods=['GET'])
 @jwt_required()
-def get_statistics():
+def get_fraud_statistics():
     """
-    Get fraud detection statistics
-    """
-    try:
-        stats = get_fraud_statistics()
-        
-        return jsonify({
-            'statistics': stats
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================
-# RUN MANUAL FRAUD CHECK
-# ============================================
-@fraud_bp.route('/check/<int:transaction_id>', methods=['POST'])
-@jwt_required()
-def manual_fraud_check(transaction_id):
-    """
-    Manually run fraud check on a specific transaction
+    Get fraud alert statistics (all roles)
     """
     try:
-        user_id = int(get_jwt_identity())
-        claims = get_jwt()
-        role = claims.get('role')
+        # Count by status
+        pending = FraudAlert.query.filter_by(status='pending').count()
+        reviewed = FraudAlert.query.filter_by(status='reviewed').count()
+        resolved = FraudAlert.query.filter_by(status='resolved').count()
+        dismissed = FraudAlert.query.filter_by(status='dismissed').count()
         
-        # Only admin and manager
-        if role not in ['admin', 'manager']:
-            return jsonify({
-                'error': 'Unauthorized.'
-            }), 403
+        # Count by severity
+        high = FraudAlert.query.filter_by(severity='high').count()
+        medium = FraudAlert.query.filter_by(severity='medium').count()
+        low = FraudAlert.query.filter_by(severity='low').count()
         
-        transaction = Transaction.query.get(transaction_id)
+        # Count by type
+        alert_types = db.session.query(
+            FraudAlert.alert_type,
+            db.func.count(FraudAlert.id)
+        ).group_by(FraudAlert.alert_type).all()
         
-        if not transaction:
-            return jsonify({'error': 'Transaction not found'}), 404
+        statistics = {
+            'by_status': {
+                'pending': pending,
+                'reviewed': reviewed,
+                'resolved': resolved,
+                'dismissed': dismissed,
+                'total': pending + reviewed + resolved + dismissed
+            },
+            'by_severity': {
+                'high': high,
+                'medium': medium,
+                'low': low
+            },
+            'by_type': {
+                alert_type: count for alert_type, count in alert_types
+            }
+        }
         
-        # Run fraud analysis
-        alerts = analyze_transaction(transaction)
-        
-        if alerts:
-            return jsonify({
-                'message': f'⚠️ {len(alerts)} fraud alert(s) detected!',
-                'alerts': [alert.to_dict() for alert in alerts]
-            }), 200
-        else:
-            return jsonify({
-                'message': '✅ No fraud detected for this transaction',
-                'alerts': []
-            }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================
-# GET PENDING ALERTS COUNT
-# ============================================
-@fraud_bp.route('/pending-count', methods=['GET'])
-@jwt_required()
-def get_pending_count():
-    """
-    Get count of pending alerts
-    Useful for dashboard notifications
-    """
-    try:
-        count = FraudAlert.query.filter_by(status='pending').count()
-        high_count = FraudAlert.query.filter_by(
-            status='pending',
-            severity='high'
-        ).count()
-        
-        return jsonify({
-            'pending_alerts': count,
-            'high_severity_pending': high_count
-        }), 200
+        return jsonify(statistics), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
