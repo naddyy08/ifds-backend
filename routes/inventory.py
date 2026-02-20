@@ -1,10 +1,6 @@
 # routes/inventory.py
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import (
-    jwt_required, 
-    get_jwt_identity,
-    get_jwt              # ← ADD THIS
-)
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models import db, Inventory, AuditLog
 from datetime import datetime
 
@@ -12,13 +8,13 @@ inventory_bp = Blueprint('inventory', __name__)
 
 
 # ============================================
-# GET ALL INVENTORY ITEMS - FIXED
+# GET ALL INVENTORY ITEMS
 # ============================================
 @inventory_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_all_items():
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
+        user_id = int(get_jwt_identity())
         
         query = Inventory.query
         category = request.args.get('category')
@@ -31,7 +27,7 @@ def get_all_items():
         items = query.all()
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='VIEW_INVENTORY',
             details=f'Viewed {len(items)} inventory items',
             ip_address=request.remote_addr
@@ -49,13 +45,13 @@ def get_all_items():
 
 
 # ============================================
-# GET ITEM BY ID - FIXED
+# GET ITEM BY ID
 # ============================================
 @inventory_bp.route('/<int:item_id>', methods=['GET'])
 @jwt_required()
 def get_item_by_id(item_id):
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
+        user_id = int(get_jwt_identity())
         
         item = Inventory.query.get(item_id)
         
@@ -63,7 +59,7 @@ def get_item_by_id(item_id):
             return jsonify({'error': 'Item not found'}), 404
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='VIEW_ITEM',
             details=f'Viewed item: {item.item_name}',
             ip_address=request.remote_addr
@@ -78,13 +74,13 @@ def get_item_by_id(item_id):
 
 
 # ============================================
-# ADD NEW ITEM - FIXED
+# ADD NEW ITEM
 # ============================================
 @inventory_bp.route('/', methods=['POST'])
 @jwt_required()
 def add_item():
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
+        user_id = int(get_jwt_identity())
         data = request.get_json()
         
         required_fields = ['item_name', 'category', 'quantity', 'unit']
@@ -94,7 +90,8 @@ def add_item():
         
         existing_item = Inventory.query.filter_by(
             item_name=data['item_name'],
-            category=data['category']
+            category=data['category'],
+            is_active=True
         ).first()
         
         if existing_item:
@@ -108,16 +105,16 @@ def add_item():
             reorder_level=float(data.get('reorder_level', 0)),
             unit_price=float(data.get('unit_price', 0)),
             supplier_name=data.get('supplier_name'),
-            created_by=user_id             # ← FIXED
+            created_by=user_id
         )
         
         db.session.add(new_item)
         db.session.commit()
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='ADD_INVENTORY_ITEM',
-            details=f'Added: {new_item.item_name}',
+            details=f'Added: {new_item.item_name} (Qty: {new_item.quantity} {new_item.unit})',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -134,13 +131,13 @@ def add_item():
 
 
 # ============================================
-# UPDATE ITEM - FIXED
+# UPDATE ITEM
 # ============================================
 @inventory_bp.route('/<int:item_id>', methods=['PUT'])
 @jwt_required()
 def update_item(item_id):
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
+        user_id = int(get_jwt_identity())
         data = request.get_json()
         
         item = Inventory.query.get(item_id)
@@ -148,20 +145,35 @@ def update_item(item_id):
         if not item:
             return jsonify({'error': 'Item not found'}), 404
         
-        if 'item_name' in data:
+        # Store old values for audit log
+        old_values = []
+        
+        if 'item_name' in data and data['item_name'] != item.item_name:
+            old_values.append(f"name: {item.item_name} → {data['item_name']}")
             item.item_name = data['item_name']
-        if 'category' in data:
+            
+        if 'category' in data and data['category'] != item.category:
+            old_values.append(f"category: {item.category} → {data['category']}")
             item.category = data['category']
+            
         if 'quantity' in data:
-            item.quantity = float(data['quantity'])
+            new_qty = float(data['quantity'])
+            if new_qty != item.quantity:
+                old_values.append(f"quantity: {item.quantity} → {new_qty}")
+                item.quantity = new_qty
+                
         if 'unit' in data:
             item.unit = data['unit']
+            
         if 'reorder_level' in data:
             item.reorder_level = float(data['reorder_level'])
+            
         if 'unit_price' in data:
             item.unit_price = float(data['unit_price'])
+            
         if 'supplier_name' in data:
             item.supplier_name = data['supplier_name']
+            
         if 'is_active' in data:
             item.is_active = data['is_active']
             
@@ -169,9 +181,9 @@ def update_item(item_id):
         db.session.commit()
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='UPDATE_INVENTORY_ITEM',
-            details=f'Updated: {item.item_name}',
+            details=f'Updated: {item.item_name}. Changes: {", ".join(old_values) if old_values else "No changes"}',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -188,39 +200,53 @@ def update_item(item_id):
 
 
 # ============================================
-# DELETE ITEM - FIXED
+# DELETE ITEM (ADMIN ONLY)
 # ============================================
 @inventory_bp.route('/<int:item_id>', methods=['DELETE'])
 @jwt_required()
 def delete_item(item_id):
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
-        claims = get_jwt()                   # ← GET CLAIMS
-        role = claims.get('role')           # ← GET ROLE
+        user_id = int(get_jwt_identity())
+        claims = get_jwt()
+        role = claims.get('role')
         
         # Only admin can delete
         if role != 'admin':
-            return jsonify({'error': 'Unauthorized. Only admins can delete items.'}), 403
+            log = AuditLog(
+                user_id=user_id,
+                action='UNAUTHORIZED_DELETE_ATTEMPT',
+                details=f'User with role "{role}" attempted to delete item ID {item_id}',
+                ip_address=request.remote_addr
+            )
+            db.session.add(log)
+            db.session.commit()
+            
+            return jsonify({
+                'error': 'Unauthorized. Only administrators can delete inventory items.'
+            }), 403
         
         item = Inventory.query.get(item_id)
         
         if not item:
             return jsonify({'error': 'Item not found'}), 404
         
+        # Soft delete (set is_active to False instead of actually deleting)
         item.is_active = False
         item.updated_at = datetime.utcnow()
         db.session.commit()
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='DELETE_INVENTORY_ITEM',
-            details=f'Deleted: {item.item_name}',
+            details=f'Deleted (soft): {item.item_name} (ID: {item.id})',
             ip_address=request.remote_addr
         )
         db.session.add(log)
         db.session.commit()
         
-        return jsonify({'message': 'Item deleted successfully'}), 200
+        return jsonify({
+            'message': 'Item deleted successfully'
+        }), 200
         
     except Exception as e:
         db.session.rollback()
@@ -228,13 +254,13 @@ def delete_item(item_id):
 
 
 # ============================================
-# SEARCH ITEMS - FIXED
+# SEARCH ITEMS
 # ============================================
 @inventory_bp.route('/search', methods=['GET'])
 @jwt_required()
 def search_items():
     try:
-        user_id = int(get_jwt_identity())   # ← FIXED
+        user_id = int(get_jwt_identity())
         search_query = request.args.get('q', '')
         
         if not search_query:
@@ -246,9 +272,9 @@ def search_items():
         ).all()
         
         log = AuditLog(
-            user_id=user_id,               # ← FIXED
+            user_id=user_id,
             action='SEARCH_INVENTORY',
-            details=f'Searched: {search_query}',
+            details=f'Searched: "{search_query}" (Found: {len(items)} items)',
             ip_address=request.remote_addr
         )
         db.session.add(log)
@@ -265,16 +291,27 @@ def search_items():
 
 
 # ============================================
-# LOW STOCK ITEMS - FIXED
+# LOW STOCK ITEMS
 # ============================================
 @inventory_bp.route('/low-stock', methods=['GET'])
 @jwt_required()
 def get_low_stock():
     try:
+        user_id = int(get_jwt_identity())
+        
         items = Inventory.query.filter(
             Inventory.quantity <= Inventory.reorder_level,
             Inventory.is_active == True
         ).all()
+        
+        log = AuditLog(
+            user_id=user_id,
+            action='VIEW_LOW_STOCK',
+            details=f'Viewed low stock items (Found: {len(items)} items)',
+            ip_address=request.remote_addr
+        )
+        db.session.add(log)
+        db.session.commit()
         
         return jsonify({
             'items': [item.to_dict() for item in items],
