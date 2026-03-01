@@ -43,6 +43,7 @@ def create_app():
             'version': '1.0',
             'endpoints': {
                 'auth': '/api/auth',
+                'audit': '/api/audit',
                 'inventory': '/api/inventory',
                 'transactions': '/api/transactions',
                 'fraud': '/api/fraud',
