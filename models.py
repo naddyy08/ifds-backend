@@ -34,23 +34,51 @@ class User(db.Model):
 
 
 class AuditLog(db.Model):
+    """
+    Tamper-proof audit log model
+    CRITICAL: user_id is nullable to log system events and failed login attempts
+    No UPDATE or DELETE routes exist for this model
+    """
     __tablename__ = 'audit_logs'
     __table_args__ = (
         {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4', 'mysql_collate': 'utf8mb4_unicode_ci'},
     )
     
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    action = db.Column(db.String(100), nullable=False)
+    user_id = db.Column(
+        db.Integer, 
+        db.ForeignKey('users.id'), 
+        nullable=True,  # ← CHANGED: Must be nullable for failed logins and system events
+        index=True
+    )
+    action = db.Column(db.String(100), nullable=False, index=True)
     details = db.Column(db.Text)
     ip_address = db.Column(db.String(50))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(
+        db.DateTime, 
+        default=datetime.utcnow, 
+        nullable=False,
+        index=True  # Index for faster date-based queries
+    )
     
-    # Relationship
+    # Relationship (nullable because user_id can be null)
     user = db.relationship('User', backref='audit_logs')
     
     def __repr__(self):
         return f'<AuditLog {self.action} by User {self.user_id}>'
+    
+    def to_dict(self):
+        """Convert audit log to dictionary for JSON response"""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else 'System',  # ← Handle null user_id
+            'action': self.action,
+            'details': self.details,
+            'ip_address': self.ip_address,
+            'timestamp': self.timestamp.isoformat()  # ← Better format for frontend
+        }
+
 
 class Inventory(db.Model):
     __tablename__ = 'inventory'
@@ -93,6 +121,7 @@ class Inventory(db.Model):
             'is_active': self.is_active
         }
     
+
 class Transaction(db.Model):
     __tablename__ = 'transactions'
     
@@ -132,6 +161,7 @@ class Transaction(db.Model):
             'is_flagged': self.is_flagged
         }
     
+
 class FraudAlert(db.Model):
     __tablename__ = 'fraud_alerts'
     
