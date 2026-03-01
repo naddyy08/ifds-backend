@@ -9,6 +9,7 @@ from routes.inventory import inventory_bp
 from routes.transactions import transactions_bp
 from routes.fraud import fraud_bp
 from routes.reports import reports_bp
+from routes.audit import audit_bp
 
 def create_app():
     """Application factory pattern"""
@@ -28,6 +29,7 @@ def create_app():
     app.register_blueprint(transactions_bp, url_prefix='/api/transactions')
     app.register_blueprint(fraud_bp, url_prefix='/api/fraud')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
+    app.register_blueprint(audit_bp, url_prefix='/api/audit')
     
     # Create database tables
     with app.app_context():
