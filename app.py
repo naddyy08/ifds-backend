@@ -22,19 +22,12 @@ def create_app():
     # Initialize extensions
     db.init_app(app)
     
-    # ✅ FIXED CORS Configuration
-    CORS(app, resources={
-        r"/api/*": {
-            "origins": [
-                "https://ifds-frontend.vercel.app",
-                "http://localhost:3000"
-            ],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
-            "expose_headers": ["Content-Type", "Authorization"],
-            "supports_credentials": True
-        }
-    })
+    # ✅ SIMPLIFIED CORS - Allow all origins (good for FYP/development)
+    CORS(app, 
+         origins="*",
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         supports_credentials=False)
     
     JWTManager(app)
     
