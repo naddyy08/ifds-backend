@@ -10,6 +10,7 @@ from routes.transactions import transactions_bp
 from routes.fraud import fraud_bp
 from routes.reports import reports_bp
 from routes.audit import audit_bp
+import os
 
 def create_app():
     """Application factory pattern"""
@@ -20,7 +21,21 @@ def create_app():
     
     # Initialize extensions
     db.init_app(app)
-    CORS(app)  # Enable CORS for React frontend
+    
+    # ✅ FIXED CORS Configuration
+    CORS(app, resources={
+        r"/api/*": {
+            "origins": [
+                "https://ifds-frontend.vercel.app",
+                "http://localhost:3000"
+            ],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+            "expose_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True
+        }
+    })
+    
     JWTManager(app)
     
     # Register blueprints
@@ -34,6 +49,7 @@ def create_app():
     # Create database tables
     with app.app_context():
         db.create_all()
+        print("[OK] Database tables created!")
     
     # Root endpoint
     @app.route('/')
@@ -43,11 +59,11 @@ def create_app():
             'version': '1.0',
             'endpoints': {
                 'auth': '/api/auth',
-                'audit': '/api/audit',
                 'inventory': '/api/inventory',
                 'transactions': '/api/transactions',
                 'fraud': '/api/fraud',
-                'reports': '/api/reports'
+                'reports': '/api/reports',
+                'audit': '/api/audit'
             }
         })
     
@@ -60,18 +76,12 @@ def create_app():
     def internal_error(error):
         return jsonify({'error': 'Internal server error'}), 500
     
-    @app.errorhandler(401)
-    def unauthorized(error):
-        return jsonify({'error': 'Unauthorized access'}), 401
-    
-    @app.errorhandler(403)
-    def forbidden(error):
-        return jsonify({'error': 'Forbidden - insufficient permissions'}), 403
-    
     return app
 
 if __name__ == '__main__':
     app = create_app()
+    print("[RUNNING] IFDS Backend Server Running...")
+    print("[SERVER] http://localhost:5000")
     app.run(debug=True, port=5000)
 
 # Create app instance for Gunicorn (production)
