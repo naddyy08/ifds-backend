@@ -27,28 +27,46 @@ def daily_inventory_report():
         else:
             target_date = datetime.utcnow().date()
         
+
         # Get all active inventory items
         items = Inventory.query.filter_by(is_active=True).all()
-        
+
         # Get transactions for this date
         start_of_day = datetime.combine(target_date, datetime.min.time())
         end_of_day = datetime.combine(target_date, datetime.max.time())
-        
+
         transactions = Transaction.query.filter(
             Transaction.timestamp >= start_of_day,
             Transaction.timestamp <= end_of_day
         ).all()
-        
+
         # Calculate totals
         total_stock_value = sum(
             item.quantity * item.unit_price for item in items
         )
-        
+
         low_stock_items = [
             item for item in items 
             if item.quantity <= item.reorder_level
         ]
-        
+
+        # Category summary
+        category_summary = {}
+        for item in items:
+            cat = item.category
+            if cat not in category_summary:
+                category_summary[cat] = {
+                    'total_items': 0,
+                    'total_quantity': 0,
+                    'total_value': 0.0,
+                    'low_stock_count': 0
+                }
+            category_summary[cat]['total_items'] += 1
+            category_summary[cat]['total_quantity'] += item.quantity
+            category_summary[cat]['total_value'] += item.quantity * item.unit_price
+            if item.quantity <= item.reorder_level:
+                category_summary[cat]['low_stock_count'] += 1
+
         report_data = {
             'report_type': 'Daily Inventory Report',
             'date': target_date.strftime('%Y-%m-%d'),
@@ -59,11 +77,19 @@ def daily_inventory_report():
                 'low_stock_count': len(low_stock_items),
                 'transactions_today': len(transactions)
             },
+            'category_summary': {
+                cat: {
+                    'total_items': val['total_items'],
+                    'total_quantity': round(val['total_quantity'], 2),
+                    'total_value': round(val['total_value'], 2),
+                    'low_stock_count': val['low_stock_count']
+                } for cat, val in category_summary.items()
+            },
             'inventory_items': [item.to_dict() for item in items],
             'low_stock_items': [item.to_dict() for item in low_stock_items],
             'transactions': [t.to_dict() for t in transactions]
         }
-        
+
         return jsonify(report_data), 200
         
     except Exception as e:
