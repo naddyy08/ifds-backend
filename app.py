@@ -38,6 +38,9 @@ def create_app():
     app.register_blueprint(fraud_bp, url_prefix='/api/fraud')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(audit_bp, url_prefix='/api/audit')
+    # Register users blueprint for admin RBAC
+    from routes.users import users_bp
+    app.register_blueprint(users_bp, url_prefix='/api/users')
     
     # Create database tables
     with app.app_context():
@@ -56,7 +59,8 @@ def create_app():
                 'transactions': '/api/transactions',
                 'fraud': '/api/fraud',
                 'reports': '/api/reports',
-                'audit': '/api/audit'
+                'audit': '/api/audit',
+                'users': '/api/users'
             }
         })
     
