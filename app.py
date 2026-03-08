@@ -41,6 +41,10 @@ def create_app():
     # Register users blueprint for admin RBAC
     from routes.users import users_bp
     app.register_blueprint(users_bp, url_prefix='/api/users')
+
+    # Register settings blueprint
+    from routes.settings import settings_bp
+    app.register_blueprint(settings_bp, url_prefix='/api/settings')
     
     # Create database tables
     with app.app_context():
