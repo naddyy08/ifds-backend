@@ -24,10 +24,10 @@ def create_app():
     
     # ✅ SIMPLIFIED CORS - Allow all origins (good for FYP/development)
     CORS(app, 
-         origins="*",
-         allow_headers=["Content-Type", "Authorization"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         supports_credentials=False)
+     origins="*",
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     supports_credentials=False)
     
     JWTManager(app)
     
