@@ -10,6 +10,7 @@ from routes.transactions import transactions_bp
 from routes.fraud import fraud_bp
 from routes.reports import reports_bp
 from routes.audit import audit_bp
+from routes.settings import settings_bp
 import os
 
 def create_app():
@@ -23,7 +24,6 @@ def create_app():
     db.init_app(app)
     
     # ✅ CRITICAL: CORS Configuration - MUST be before JWTManager
-    # Allow all origins for FYP/development environment
     CORS(app, 
          resources={r"/api/*": {"origins": "*"}},
          allow_headers=["Content-Type", "Authorization"],
@@ -43,20 +43,14 @@ def create_app():
     app.register_blueprint(fraud_bp, url_prefix='/api/fraud')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(audit_bp, url_prefix='/api/audit')
-    
+    app.register_blueprint(settings_bp, url_prefix='/api/settings')
+
     # Register users blueprint for admin RBAC (if exists)
     try:
         from routes.users import users_bp
         app.register_blueprint(users_bp, url_prefix='/api/users')
     except ImportError:
         print("[WARNING] Users blueprint not found - skipping")
-    
-    # Register settings blueprint (if exists)
-    try:
-        from routes.settings import settings_bp
-        app.register_blueprint(settings_bp, url_prefix='/api/settings')
-    except ImportError:
-        print("[WARNING] Settings blueprint not found - skipping")
     
     # Create database tables
     with app.app_context():
@@ -81,7 +75,7 @@ def create_app():
             }
         })
     
-    # CORS-specific route for preflight
+    # CORS preflight handler
     @app.after_request
     def after_request(response):
         response.headers.add('Access-Control-Allow-Origin', '*')
