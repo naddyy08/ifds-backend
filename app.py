@@ -22,13 +22,18 @@ def create_app():
     # Initialize extensions
     db.init_app(app)
     
-    # ✅ SIMPLIFIED CORS - Allow all origins (good for FYP/development)
+    # ✅ CRITICAL: CORS Configuration - MUST be before JWTManager
+    # Allow all origins for FYP/development environment
     CORS(app, 
-     origins="*",
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     supports_credentials=False)
+         resources={r"/api/*": {"origins": "*"}},
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         expose_headers=["Content-Type", "Authorization"],
+         supports_credentials=False,
+         send_wildcard=True,
+         always_send=True)
     
+    # Initialize JWT AFTER CORS
     JWTManager(app)
     
     # Register blueprints
@@ -38,13 +43,20 @@ def create_app():
     app.register_blueprint(fraud_bp, url_prefix='/api/fraud')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(audit_bp, url_prefix='/api/audit')
-    # Register users blueprint for admin RBAC
-    from routes.users import users_bp
-    app.register_blueprint(users_bp, url_prefix='/api/users')
-
-    # Register settings blueprint
-    from routes.settings import settings_bp
-    app.register_blueprint(settings_bp, url_prefix='/api/settings')
+    
+    # Register users blueprint for admin RBAC (if exists)
+    try:
+        from routes.users import users_bp
+        app.register_blueprint(users_bp, url_prefix='/api/users')
+    except ImportError:
+        print("[WARNING] Users blueprint not found - skipping")
+    
+    # Register settings blueprint (if exists)
+    try:
+        from routes.settings import settings_bp
+        app.register_blueprint(settings_bp, url_prefix='/api/settings')
+    except ImportError:
+        print("[WARNING] Settings blueprint not found - skipping")
     
     # Create database tables
     with app.app_context():
@@ -64,9 +76,18 @@ def create_app():
                 'fraud': '/api/fraud',
                 'reports': '/api/reports',
                 'audit': '/api/audit',
-                'users': '/api/users'
+                'users': '/api/users',
+                'settings': '/api/settings'
             }
         })
+    
+    # CORS-specific route for preflight
+    @app.after_request
+    def after_request(response):
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     
     # Error handlers
     @app.errorhandler(404)
