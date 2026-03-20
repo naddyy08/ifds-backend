@@ -37,7 +37,14 @@ def get_settings():
     claims = get_jwt()
     if claims.get('role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
-    return jsonify(load_settings())
+    try:
+        settings = load_settings()
+        return jsonify(settings)
+    except Exception as e:
+        import traceback
+        print("[ERROR] Failed to load settings:", e)
+        traceback.print_exc()
+        return jsonify({'error': 'Failed to load settings', 'details': str(e)}), 500
 
 # Update settings (admin only)
 @settings_bp.route('/', methods=['PUT'])
