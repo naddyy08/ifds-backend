@@ -1,13 +1,12 @@
 # routes/settings.py
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt
-import os, json
+import os, json, io
 from datetime import datetime
 
 settings_bp = Blueprint('settings', __name__)
 
 SETTINGS_FILE = 'instance/system_settings.json'
-BACKUP_FILE = 'instance/db_backup.sql'
 
 DEFAULT_SETTINGS = {
     'fraud_thresholds': {
@@ -21,22 +20,18 @@ DEFAULT_SETTINGS = {
 }
 
 def load_settings():
-    # ✅ FIX: Create the instance/ folder if it doesn't exist
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-
     if not os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, 'w') as f:
             json.dump(DEFAULT_SETTINGS, f, indent=2)
-
     with open(SETTINGS_FILE) as f:
         return json.load(f)
 
 def save_settings(data):
-    # ✅ FIX: Create the instance/ folder if it doesn't exist
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
+
 
 # Get settings (admin only)
 @settings_bp.route('/', methods=['GET'])
@@ -50,9 +45,9 @@ def get_settings():
         return jsonify(settings)
     except Exception as e:
         import traceback
-        print("[ERROR] Failed to load settings:", e)
         traceback.print_exc()
         return jsonify({'error': 'Failed to load settings', 'details': str(e)}), 500
+
 
 # Update settings (admin only)
 @settings_bp.route('/', methods=['PUT'])
@@ -66,27 +61,54 @@ def update_settings():
         save_settings(data)
         return jsonify({'message': 'Settings updated'})
     except Exception as e:
-        print("[ERROR] Failed to save settings:", e)
         return jsonify({'error': 'Failed to save settings', 'details': str(e)}), 500
 
-# Export DB backup (admin only)
+
+# Export full database backup as JSON (admin only)
 @settings_bp.route('/backup', methods=['GET'])
 @jwt_required()
 def export_backup():
     claims = get_jwt()
     if claims.get('role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
+
     try:
-        from models import db
-        db_uri = db.engine.url.database
-        backup_path = BACKUP_FILE
-        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
-        if os.path.exists(db_uri):
-            import shutil
-            shutil.copy(db_uri, backup_path)
-            return send_file(backup_path, as_attachment=True)
-        else:
-            return jsonify({'error': 'Backup not supported for this DB'}), 400
+        from models import User, Inventory, Transaction, FraudAlert, AuditLog
+
+        backup_data = {
+            'exported_at': datetime.utcnow().isoformat(),
+            'database': 'ifds_db',
+            'tables': {
+                'users': [u.to_dict() for u in User.query.all()],
+                'inventory': [i.to_dict() for i in Inventory.query.all()],
+                'transactions': [t.to_dict() for t in Transaction.query.all()],
+                'fraud_alerts': [f.to_dict() for f in FraudAlert.query.all()],
+                'audit_logs': [a.to_dict() for a in AuditLog.query.all()],
+            },
+            'summary': {
+                'total_users': User.query.count(),
+                'total_inventory': Inventory.query.count(),
+                'total_transactions': Transaction.query.count(),
+                'total_fraud_alerts': FraudAlert.query.count(),
+                'total_audit_logs': AuditLog.query.count(),
+            }
+        }
+
+        # Convert to JSON bytes and send as downloadable file
+        json_bytes = json.dumps(backup_data, indent=2, default=str).encode('utf-8')
+        buffer = io.BytesIO(json_bytes)
+        buffer.seek(0)
+
+        filename = f"ifds_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+
+        return send_file(
+            buffer,
+            mimetype='application/json',
+            as_attachment=True,
+            download_name=filename
+        )
+
     except Exception as e:
-        print("[ERROR] Backup failed:", e)
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': 'Backup failed', 'details': str(e)}), 500
