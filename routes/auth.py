@@ -2,8 +2,8 @@
 from flask import Blueprint, request, jsonify
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import (
-    create_access_token, 
-    jwt_required, 
+    create_access_token,
+    jwt_required,
     get_jwt_identity,
     get_jwt
 )
@@ -22,16 +22,16 @@ def validate_password_strength(password):
     """
     if len(password) < 8:
         return False, "Password must be at least 8 characters long"
-    
+
     if not re.search(r"[A-Z]", password):
         return False, "Password must contain at least one uppercase letter"
-    
+
     if not re.search(r"[a-z]", password):
         return False, "Password must contain at least one lowercase letter"
-    
+
     if not re.search(r"\d", password):
         return False, "Password must contain at least one number"
-    
+
     return True, None
 
 
@@ -41,74 +41,74 @@ def validate_password_strength(password):
 @auth_bp.route('/register', methods=['POST'])
 def register():
     """
-    Register a new user
-    Expected JSON: {username, email, password, role}
+    Register a new user.
+    Role is ALWAYS set to 'staff' regardless of what is sent.
+    Only admin can change roles via the user management panel.
+    Expected JSON: {username, email, password}
     """
     try:
         data = request.get_json()
-        
+
         # Validate required fields
-        required_fields = ['username', 'email', 'password', 'role']
+        required_fields = ['username', 'email', 'password']
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
-        
+
         # Validate username length
         if len(data['username']) < 3:
             return jsonify({'error': 'Username must be at least 3 characters long'}), 400
-        
+
         # Validate email format
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_regex, data['email']):
             return jsonify({'error': 'Invalid email format'}), 400
-        
+
         # Check if username already exists
         if User.query.filter_by(username=data['username']).first():
             return jsonify({'error': 'Username already exists'}), 409
-        
+
         # Check if email already exists
         if User.query.filter_by(email=data['email']).first():
             return jsonify({'error': 'Email already exists'}), 409
-        
-        # Validate role
-        valid_roles = ['admin', 'manager', 'staff']
-        if data['role'] not in valid_roles:
-            return jsonify({'error': 'Invalid role. Must be: admin, manager, or staff'}), 400
-        
+
         # Validate password strength
         is_valid, error_msg = validate_password_strength(data['password'])
         if not is_valid:
             return jsonify({'error': error_msg}), 400
-        
+
         # Hash password
         password_hash = bcrypt.generate_password_hash(data['password']).decode('utf-8')
-        
+
+        # ✅ SECURITY FIX: Always assign 'staff' role — ignore any role sent from frontend
+        assigned_role = 'staff'
+
         # Create new user
         new_user = User(
             username=data['username'],
             email=data['email'],
             password_hash=password_hash,
-            role=data['role']
+            role=assigned_role
         )
-        
+
         db.session.add(new_user)
         db.session.commit()
-        
+
         # Log the action
         log = AuditLog(
             user_id=new_user.id,
             action='USER_REGISTERED',
-            details=f'New {data["role"]} user registered: {data["username"]}',
+            details=f'New staff user registered: {data["username"]}',
             ip_address=request.remote_addr
         )
         db.session.add(log)
         db.session.commit()
-        
+
         return jsonify({
             'message': 'User registered successfully',
             'user': new_user.to_dict()
         }), 201
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -121,14 +121,13 @@ def register():
 def login():
     try:
         data = request.get_json()
-        
+
         if not data.get('username') or not data.get('password'):
             return jsonify({'error': 'Username and password are required'}), 400
-        
+
         user = User.query.filter_by(username=data['username']).first()
-        
+
         if not user:
-            # Log failed login attempt
             log = AuditLog(
                 user_id=None,
                 action='FAILED_LOGIN_ATTEMPT',
@@ -137,25 +136,24 @@ def login():
             )
             db.session.add(log)
             db.session.commit()
-            
+
             return jsonify({'error': 'Invalid credentials'}), 401
-        
+
         if not user.is_active:
             return jsonify({'error': 'Account is deactivated. Please contact administrator.'}), 403
-        
+
         if not bcrypt.check_password_hash(user.password_hash, data['password']):
-            # Log failed password attempt
             log = AuditLog(
                 user_id=user.id,
                 action='FAILED_LOGIN_ATTEMPT',
-                details=f'Failed login attempt - wrong password',
+                details=f'Failed login attempt - wrong password for: {user.username}',
                 ip_address=request.remote_addr
             )
             db.session.add(log)
             db.session.commit()
-            
+
             return jsonify({'error': 'Invalid credentials'}), 401
-        
+
         # Create JWT token with role claims
         access_token = create_access_token(
             identity=str(user.id),
@@ -165,7 +163,7 @@ def login():
                 'email': user.email
             }
         )
-        
+
         # Log successful login
         log = AuditLog(
             user_id=user.id,
@@ -175,13 +173,13 @@ def login():
         )
         db.session.add(log)
         db.session.commit()
-        
+
         return jsonify({
             'message': 'Login successful',
             'access_token': access_token,
             'user': user.to_dict()
         }), 200
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -195,14 +193,12 @@ def get_profile():
     try:
         user_id = get_jwt_identity()
         user = User.query.get(int(user_id))
-        
+
         if not user:
             return jsonify({'error': 'User not found'}), 404
-        
-        return jsonify({
-            'user': user.to_dict()
-        }), 200
-        
+
+        return jsonify({'user': user.to_dict()}), 200
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -215,7 +211,7 @@ def get_profile():
 def logout():
     try:
         user_id = get_jwt_identity()
-        
+
         log = AuditLog(
             user_id=int(user_id),
             action='USER_LOGOUT',
@@ -224,9 +220,9 @@ def logout():
         )
         db.session.add(log)
         db.session.commit()
-        
+
         return jsonify({'message': 'Logout successful'}), 200
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -240,21 +236,19 @@ def change_password():
     try:
         user_id = get_jwt_identity()
         data = request.get_json()
-        
+
         if not data.get('current_password') or not data.get('new_password'):
             return jsonify({'error': 'Current and new password are required'}), 400
-        
-        # Validate new password strength
+
         is_valid, error_msg = validate_password_strength(data['new_password'])
         if not is_valid:
             return jsonify({'error': error_msg}), 400
-        
+
         user = User.query.get(int(user_id))
-        
+
         if not user:
             return jsonify({'error': 'User not found'}), 404
-        
-        # Verify current password
+
         if not bcrypt.check_password_hash(user.password_hash, data['current_password']):
             log = AuditLog(
                 user_id=int(user_id),
@@ -264,16 +258,14 @@ def change_password():
             )
             db.session.add(log)
             db.session.commit()
-            
+
             return jsonify({'error': 'Current password is incorrect'}), 401
-        
-        # Update password
+
         user.password_hash = bcrypt.generate_password_hash(
             data['new_password']
         ).decode('utf-8')
         db.session.commit()
-        
-        # Log successful password change
+
         log = AuditLog(
             user_id=int(user_id),
             action='PASSWORD_CHANGED',
@@ -282,9 +274,9 @@ def change_password():
         )
         db.session.add(log)
         db.session.commit()
-        
+
         return jsonify({'message': 'Password changed successfully'}), 200
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
